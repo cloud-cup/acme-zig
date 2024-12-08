@@ -8,7 +8,7 @@ pub fn encodeJSON(
     nonce: []const u8,
     url: []const u8,
     kid: ?[]const u8,
-    emails: []const []const u8,
+    payload: []const u8,
     key_pair: KeyPair,
 ) ![]const u8 {
     var fbs = std.io.fixedBufferStream(buf);
@@ -21,8 +21,6 @@ pub fn encodeJSON(
     try jw.write(protected);
 
     try jw.objectField("payload");
-    var payload_buffer: [1024]u8 = undefined;
-    const payload = try jwsPayload(&payload_buffer, emails);
     try jw.write(payload);
 
     try jw.objectField("signature");
@@ -41,7 +39,7 @@ fn jwsHead(
     nonce: []const u8,
     url: []const u8,
     kid: ?[]const u8,
-    key_pair: KeyPair,
+    key_pair: ?KeyPair,
 ) ![]const u8 {
     var buf: [1024]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
@@ -56,7 +54,7 @@ fn jwsHead(
         try jw.write(k);
     } else {
         try jw.objectField("jwk");
-        try jwkEncodeP256(&jw, key_pair);
+        try jwkEncodeP256(&jw, key_pair.?);
     }
     try jw.objectField("nonce");
     try jw.write(nonce);
@@ -87,7 +85,6 @@ fn jwsPayload(payload_buffer: []u8, emails: []const []const u8) ![]const u8 {
     try jw.endArray();
 
     try jw.endObject();
-
     return Base64urlEncoder.encode(payload_buffer, fbs.getWritten());
 }
 

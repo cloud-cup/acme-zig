@@ -17,5 +17,6 @@ pub fn main() !void {
     const acc = try client.newAccount(&[_][]const u8{
         "aliamer@gmail.com",
     });
-    std.debug.print("status: {s}", .{acc.status});
+    std.debug.print("status: {s}\n", .{acc.body.value.status});
+    std.debug.print("location: {s}\n", .{acc.location});
 }
