@@ -64,7 +64,6 @@ fn jwsHead(
     try jw.write(url);
 
     try jw.endObject();
-    std.debug.print("fbs: {s}\n", .{fbs.getWritten()});
 
     return Base64urlEncoder.encode(protected_buffer, fbs.getWritten());
 }
@@ -88,7 +87,6 @@ fn jwsPayload(payload_buffer: []u8, emails: []const []const u8) ![]const u8 {
     try jw.endArray();
 
     try jw.endObject();
-    std.debug.print("{s}\n", .{fbs.getWritten()});
 
     return Base64urlEncoder.encode(payload_buffer, fbs.getWritten());
 }

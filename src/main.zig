@@ -10,13 +10,12 @@ pub fn main() !void {
         .allocator = allocator,
     };
     defer http_client.deinit();
-    var nonces = std.ArrayList([]const u8).init(allocator);
-    defer nonces.deinit();
 
-    var client = try Acme.init(allocator, &http_client, &nonces, .LetsEncryptProductionCA);
+    var client = try Acme.init(allocator, &http_client, .LetsEncryptProductionCA);
     defer client.deinit();
 
-    try client.newAccount(&[_][]const u8{
+    const acc = try client.newAccount(&[_][]const u8{
         "aliamer@gmail.com",
     });
+    std.debug.print("status: {s}", .{acc.status});
 }
