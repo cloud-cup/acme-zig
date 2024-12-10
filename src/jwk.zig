@@ -39,7 +39,7 @@ fn jwsHead(
     nonce: []const u8,
     url: []const u8,
     kid: ?[]const u8,
-    key_pair: ?KeyPair,
+    key_pair: KeyPair,
 ) ![]const u8 {
     var buf: [1024]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
@@ -54,7 +54,7 @@ fn jwsHead(
         try jw.write(k);
     } else {
         try jw.objectField("jwk");
-        try jwkEncodeP256(&jw, key_pair.?);
+        try jwkEncodeP256(&jw, key_pair);
     }
     try jw.objectField("nonce");
     try jw.write(nonce);

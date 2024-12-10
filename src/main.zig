@@ -10,13 +10,14 @@ pub fn main() !void {
         .allocator = allocator,
     };
     defer http_client.deinit();
+    var nonces = std.ArrayList([]u8).init(allocator);
+    defer nonces.deinit();
 
-    var client = try Acme.init(allocator, &http_client, .LetsEncryptProductionCA);
+    var client = try Acme.init(allocator, &http_client, &nonces, .LetsEncryptProductionCA);
     defer client.deinit();
 
-    const acc = try client.newAccount(&[_][]const u8{
-        "aliamer@gmail.com",
-    });
-    std.debug.print("status: {s}\n", .{acc.body.value.status});
-    std.debug.print("location: {s}\n", .{acc.location});
+    try client.newAccount(&[_][]const u8{"aliamer@gmail.com"});
+    try client.newOrder(&[_][]const u8{"cloud-cup.duckdns.org"});
+    std.debug.print("finalize::{s}\n", .{client.order.body.?.value.finalize});
+    std.debug.print("authorizations ::{s}\n", .{client.order.body.?.value.authorizations[0]});
 }

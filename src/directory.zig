@@ -17,7 +17,7 @@ pub const Directory = struct {
     renewalInfo: []const u8,
     revokeCert: []const u8,
 
-    pub fn getDirectory(
+    pub fn init(
         http_client: *std.http.Client,
         allocator: std.mem.Allocator,
         dir_url: []const u8,

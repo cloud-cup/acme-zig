@@ -1,8 +1,10 @@
 const std = @import("std");
 const jwk = @import("jwk.zig");
 const utils = @import("utils.zig");
-const Account = @import("account.zig").Account;
 const Directory = @import("directory.zig").Directory;
+const Nonce = @import("nonce.zig").Nonce;
+const Account = @import("account.zig").Account;
+const Order = @import("order.zig").Order;
 
 const KeyPair = std.crypto.sign.ecdsa.EcdsaP256Sha256.KeyPair;
 
@@ -11,60 +13,56 @@ const CA = enum {
 };
 
 pub const Acme = struct {
-    http_client: *std.http.Client,
     allocator: std.mem.Allocator,
+    http_client: *std.http.Client,
+    key_pair: KeyPair,
     directory: std.json.Parsed(Directory),
-    account: ?Account = null,
-    nonce: []const u8 = "",
+    nonce: Nonce,
+    account: Account,
+    order: Order,
 
-    pub fn init(allocator: std.mem.Allocator, http_client: *std.http.Client, ca: CA) !Acme {
-        const json_dir = try Directory.getDirectory(http_client, allocator, getCAUrl(ca));
+    pub fn init(
+        allocator: std.mem.Allocator,
+        http_client: *std.http.Client,
+        nonces: *std.ArrayList([]u8),
+        ca: CA,
+    ) !Acme {
+        const key_pair = try KeyPair.create(null);
+        const json_dir = try Directory.init(http_client, allocator, getCAUrl(ca));
+        const nonce = Nonce.init(allocator, nonces);
+        const account = Account.init(allocator, http_client, json_dir.value, nonce, key_pair);
+        const order = Order.init(allocator, http_client, json_dir.value, nonce, key_pair);
         return Acme{
             .http_client = http_client,
             .allocator = allocator,
+            .key_pair = key_pair,
             .directory = json_dir,
+            .nonce = nonce,
+            .account = account,
+            .order = order,
         };
     }
 
     pub fn deinit(self: *Acme) void {
         self.directory.deinit();
-        if (self.account) |ja| {
-            ja.body.deinit();
-        }
+        self.account.deinit();
+        self.order.deinit();
+        self.nonce.deinit();
     }
 
-    pub fn newAccount(self: *Acme, emails: []const []const u8) !Account {
-        const key_pair = try KeyPair.create(null);
-        self.account = try Account.new(self, emails, key_pair);
-        return self.account.?;
+    pub fn getNonce(self: Acme) ![]u8 {
+        return try self.nonce.get(self.http_client, self.directory.value.newNonce);
     }
 
-    pub fn getNonce(self: *Acme) ![]const u8 {
-        if (self.nonce.len != 0) {
-            return self.nonce;
+    pub fn newAccount(self: *Acme, emails: []const []const u8) !void {
+        self.account = try self.account.new(emails);
+    }
+
+    pub fn newOrder(self: *Acme, identifiers: []const []const u8) !void {
+        if (self.account.body == null or self.account.location == null) {
+            return error.noAccountCreated;
         }
-
-        var buf_header: [4096]u8 = undefined;
-        var req = try self.http_client.open(
-            .GET,
-            try std.Uri.parse(self.directory.value.newNonce),
-            .{ .server_header_buffer = &buf_header },
-        );
-        defer req.deinit();
-        try req.send();
-        try req.finish();
-        try req.wait();
-
-        const response = try req.reader().readAllAlloc(self.allocator, 4096);
-        defer self.allocator.free(response);
-
-        if (req.response.status != .no_content) {
-            std.log.err("{s}\n", .{response});
-            return error.FailedRequest;
-        }
-        self.nonce = try utils.getHeader(req.response, "Replay-Nonce");
-
-        return self.nonce;
+        self.order = try self.order.new(self.account.location.?, identifiers);
     }
 };
 
