@@ -63,6 +63,7 @@ pub const Acme = struct {
             return error.noAccountCreated;
         }
         self.order = try self.order.new(self.account.location.?, identifiers);
+        try self.order.authorization[0].value.authorize(self.key_pair, .ChallengeTypeDNS01);
     }
 };
 

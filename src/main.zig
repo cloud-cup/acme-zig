@@ -18,6 +18,4 @@ pub fn main() !void {
 
     try client.newAccount(&[_][]const u8{"aliamer@gmail.com"});
     try client.newOrder(&[_][]const u8{"cloud-cup.duckdns.org"});
-    std.debug.print("finalize::{s}\n", .{client.order.body.?.value.finalize});
-    std.debug.print("authorizations ::{s}\n", .{client.order.body.?.value.authorizations[0]});
 }

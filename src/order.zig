@@ -1,14 +1,15 @@
 const std = @import("std");
 const jwk = @import("jwk.zig");
 const utils = @import("utils.zig");
-const Acme = @import("Acme.zig").Acme;
-const Account = @import("account.zig").Account;
 const Directory = @import("directory.zig").Directory;
 const Nonce = @import("nonce.zig").Nonce;
+const Authorization = @import("authorization.zig").Authorization;
 const Base64urlEncoder = std.base64.url_safe_no_pad.Encoder;
 const KeyPair = std.crypto.sign.ecdsa.EcdsaP256Sha256.KeyPair;
 
-const Identifier = struct {
+const JsonAuthz = std.json.Parsed(Authorization);
+
+pub const Identifier = struct {
     type: []const u8,
     value: []const u8,
 };
@@ -28,6 +29,7 @@ pub const Order = struct {
     nonce: Nonce,
     key_pair: KeyPair,
     body: ?std.json.Parsed(OrderBody) = null,
+    authorization: []JsonAuthz = &[_]JsonAuthz{},
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -48,6 +50,10 @@ pub const Order = struct {
         if (self.body) |order| {
             order.deinit();
         }
+        for (self.authorization) |authz| {
+            authz.deinit();
+        }
+        self.allocator.free(self.authorization);
     }
 
     // NewOrder creates a new order with the server.
@@ -108,9 +114,48 @@ pub const Order = struct {
             response,
             .{ .ignore_unknown_fields = true, .allocate = .alloc_always },
         );
+
+        order.authorization = try order.getAuthoriztions();
         return order;
     }
+    fn getAuthoriztions(self: Order) ![]JsonAuthz {
+        if (self.body == null or self.body.?.value.authorizations.len == 0) {
+            return error.noAuthorizationLink;
+        }
+        const authz_urls = self.body.?.value.authorizations;
+        const authorizations = try self.allocator.alloc(JsonAuthz, authz_urls.len);
+
+        for (authz_urls, 0..) |authz_url, i| {
+            authorizations[i] = try getauthz(self.http_client, self.allocator, authz_url);
+        }
+        return authorizations;
+    }
 };
+
+fn getauthz(http_client: *std.http.Client, allocator: std.mem.Allocator, auth_url: []const u8) !JsonAuthz {
+    const uri = try std.Uri.parse(auth_url);
+    var buf: [4096]u8 = undefined;
+    var req = try http_client.open(.GET, uri, .{ .server_header_buffer = &buf });
+    defer req.deinit();
+    try req.send();
+    try req.finish();
+    try req.wait();
+
+    const response = try req.reader().readAllAlloc(allocator, 4096);
+    defer allocator.free(response);
+
+    if (req.response.status != .ok) {
+        std.log.err("{s}\n", .{response});
+        return error.FailedRequest;
+    }
+
+    return try std.json.parseFromSlice(
+        Authorization,
+        allocator,
+        response,
+        .{ .ignore_unknown_fields = true, .allocate = .alloc_always },
+    );
+}
 
 fn orderPayload(payload_buffer: []u8, identifiers: []const []const u8) ![]const u8 {
     var buf: [1024]u8 = undefined;

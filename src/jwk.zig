@@ -135,3 +135,18 @@ fn jwkEncodeP256(
 
     try jw.endObject();
 }
+
+// jwkThumbprint creates a JWK thumbprint out of pub
+// as specified in https://tools.ietf.org/html/rfc7638.
+pub fn jwkThumbprint(thumb_buffer: []u8, key_pair: KeyPair) ![]const u8 {
+    var buf: [1024]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    var jw = std.json.writeStream(fbs.writer(), .{});
+    try jwkEncodeP256(&jw, key_pair);
+
+    var signer = try key_pair.signer(null);
+    signer.update(fbs.getWritten());
+    const sig = try signer.finalize();
+
+    return Base64urlEncoder.encode(thumb_buffer, &sig.toBytes());
+}
