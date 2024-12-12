@@ -65,11 +65,57 @@ pub const Authorization = struct {
             std.debug.print("TXT Record Value: {s}\n", .{txt_record_value});
         }
     }
+
+    fn getauthz(allocator: std.mem.Allocator, http_client: *std.http.Client, nonce: Nonce, newNonce: []const u8, key_pair: KeyPair, location: []const u8, auth_url: []const u8) !std.json.Parsed(Authorization) {
+        const uri = try std.Uri.parse(auth_url);
+        var buf: [4096]u8 = undefined;
+        var req = try http_client.open(.POST, uri, .{ .server_header_buffer = &buf });
+        defer req.deinit();
+
+        const current_nonce = try nonce.get(http_client, newNonce);
+        defer nonce.free(current_nonce);
+
+        var body_buffer: [4096]u8 = undefined;
+        const body = try jwk.encodeJSON(
+            &body_buffer,
+            "ES256",
+            current_nonce,
+            auth_url,
+            location,
+            "",
+            key_pair,
+        );
+
+        req.transfer_encoding = .{ .content_length = body.len };
+        req.headers.content_type = .{ .override = "application/jose+json" };
+
+        try req.send();
+        var wtr = req.writer();
+        try wtr.writeAll(body);
+        try req.finish();
+        try req.wait();
+
+        const response = try req.reader().readAllAlloc(allocator, 4096);
+        defer allocator.free(response);
+
+        if (req.response.status != .ok) {
+            std.log.err("{s}\n", .{response});
+            return error.FailedRequest;
+        }
+        const new_nonce = try utils.getHeader(req.response, "Replay-Nonce");
+        try nonce.new(new_nonce);
+        return try std.json.parseFromSlice(
+            Authorization,
+            allocator,
+            response,
+            .{ .ignore_unknown_fields = true, .allocate = .alloc_always },
+        );
+    }
 };
 
 fn findChallenge(challenges: []Challenge, selected_challenge: CHALLENGE) Challenge {
     for (challenges) |chall| {
-        if (std.mem.eql(u8, chall.type, getChallenge(selected_challenge))) {
+        if (stringEgl(chall.type, getChallenge(selected_challenge))) {
             return chall;
         }
     }
@@ -81,4 +127,7 @@ fn getChallenge(chall: CHALLENGE) []const u8 {
         .ChallengeTypeHTTP01 => "http-01",
         .ChallengeTypeDNS01 => "dns-01",
     };
+}
+inline fn stringEgl(a: []const u8, b: []const u8) bool {
+    return std.mem.eql(u8, a, b);
 }
