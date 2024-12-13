@@ -17,5 +17,5 @@ pub fn main() !void {
     defer client.deinit();
 
     try client.newAccount(&[_][]const u8{"aliamer@gmail.com"});
-    try client.newOrder(&[_][]const u8{"cloud-cup.duckdns.org"});
+    try client.newOrder(&[_][]const u8{"cloud-cup.duckdns.org"}, .{ .type = .poll, .challenge = .ChallengeTypeHTTP01 });
 }
