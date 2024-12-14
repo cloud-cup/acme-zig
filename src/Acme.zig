@@ -5,6 +5,7 @@ const Directory = @import("directory.zig").Directory;
 const Nonce = @import("nonce.zig").Nonce;
 const Account = @import("account.zig").Account;
 const Order = @import("order.zig").Order;
+const Challenge = @import("challenge.zig").Challenge;
 const Authorization = @import("authorization.zig").Authorization;
 
 const KeyPair = std.crypto.sign.ecdsa.EcdsaP256Sha256.KeyPair;
@@ -16,14 +17,6 @@ const CA = enum {
 pub const CHALLENGE = enum {
     ChallengeTypeHTTP01,
     ChallengeTypeDNS01,
-};
-
-pub const AuthorizationOption = struct {
-    challenge: CHALLENGE = .ChallengeTypeDNS01,
-    type: enum {
-        one_time,
-        poll,
-    } = .one_time,
 };
 
 pub const Acme = struct {
@@ -76,14 +69,73 @@ pub const Acme = struct {
         self.account = try self.account.new(emails);
     }
 
-    pub fn newOrder(self: *Acme, identifiers: []const []const u8, authorzOption: AuthorizationOption) !void {
+    pub fn newOrder(self: *Acme, identifiers: []const []const u8) !void {
         if (self.account.body == null or self.account.location == null) {
             return error.noAccountCreated;
         }
         self.order = try self.order.new(self.account.location.?, identifiers);
-        self.authorization = try self.authorization.new(self.account.location.?, self.order.body.?.value.authorizations, authorzOption);
+        self.authorization = try self.authorization.new(self.account.location.?, self.order.body.?.value.authorizations);
+    }
+
+    // for testing
+    // todo: remove it
+    pub fn authorize(self: *Acme, challenge: CHALLENGE) !Challenge {
+        for (self.authorization.authorizations) |authz| {
+            const chall = findChallenge(authz.value.challenges, challenge);
+            var keyAuthz_buf: [1024]u8 = undefined;
+            const key_authz = try chall.keyAuthorization(&keyAuthz_buf, self.key_pair);
+            if (challenge == .ChallengeTypeHTTP01) {
+                var http01_buf: [1024]u8 = undefined;
+                const http01_path = try chall.http01ResourcePath(&http01_buf);
+                std.debug.print("Path:{s}\n", .{http01_path});
+                std.debug.print("Content:{s}\n", .{key_authz});
+                return chall;
+            }
+
+            if (challenge == .ChallengeTypeDNS01) {
+                var dns_name_buf: [1024]u8 = undefined;
+                var dns_value_buf: [1024]u8 = undefined;
+                const txt_record_name = try chall.dns01TXTRecordName(&dns_name_buf, authz.value.identifier.value);
+                const txt_record_value = chall.dns01TXTRecordValue(&dns_value_buf, key_authz);
+                std.debug.print("TXT Record Name: {s}\n", .{txt_record_name});
+                std.debug.print("TXT Record Value: {s}\n", .{txt_record_value});
+                return chall;
+            }
+            return error.UnsupportChallenge;
+        }
+        return error.UnsupportChallenge;
+    }
+
+    pub fn verfiyChallenge(self: *Acme, challenge: Challenge) !std.json.Parsed(Challenge) {
+        if (self.account.body == null or self.account.location == null) {
+            return error.noAccountCreated;
+        }
+        return try challenge.initiateChallenge(
+            self.key_pair,
+            self.http_client,
+            self.nonce,
+            self.directory.value,
+            self.allocator,
+            self.account.location.?,
+        );
     }
 };
+
+fn findChallenge(challenges: []Challenge, selected_challenge: CHALLENGE) Challenge {
+    for (challenges) |chall| {
+        if (std.mem.eql(u8, chall.type, getChallenge(selected_challenge))) {
+            return chall;
+        }
+    }
+    unreachable;
+}
+
+fn getChallenge(chall: CHALLENGE) []const u8 {
+    return switch (chall) {
+        .ChallengeTypeHTTP01 => "http-01",
+        .ChallengeTypeDNS01 => "dns-01",
+    };
+}
 
 fn getCAUrl(ca: CA) []const u8 {
     return switch (ca) {

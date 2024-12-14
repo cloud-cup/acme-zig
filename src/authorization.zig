@@ -39,6 +39,8 @@ const AuthorizationBody = struct {
     // Possible values are "pending", "valid", "invalid", "deactivated",
     // "expired", and "revoked".  See Section 7.1.6.
     status: []const u8,
+
+    authz_url: []const u8 = "",
 };
 
 // Authorization "represents a server's authorization for
@@ -54,6 +56,7 @@ pub const Authorization = struct {
     nonce: Nonce,
     key_pair: KeyPair,
     authorizations: []JsonAuthz = &[_]JsonAuthz{},
+    location: []const u8 = "",
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -78,12 +81,12 @@ pub const Authorization = struct {
         self.allocator.free(self.authorizations);
     }
 
-    pub fn new(self: Authorization, location: []const u8, authz_urls: []const []const u8, authzOption: AuthzOps) !Authorization {
+    pub fn new(self: Authorization, location: []const u8, authz_urls: []const []const u8) !Authorization {
         const authorizations = try self.allocator.alloc(JsonAuthz, authz_urls.len);
         errdefer self.deinit();
 
         for (authz_urls, 0..) |authz_url, i| {
-            const result = self.getAuthoriztions(location, authz_url) catch |err| {
+            const result = self.postAuthz(location, authz_url) catch |err| {
                 for (0..i) |j| {
                     authorizations[j].deinit();
                 }
@@ -91,23 +94,10 @@ pub const Authorization = struct {
                 return err;
             };
             authorizations[i] = result;
-            try self.authorize(result.value.challenges, result.value.identifier, authzOption.challenge);
+            authorizations[i].value.authz_url = authz_url;
         }
-        if (authzOption.type == .poll) {
-            for (authz_urls, 0..) |authz_url, i| {
-                const result = self.pollAuthorization(location, authz_url) catch |err| {
-                    for (0..authz_urls.len) |j| {
-                        authorizations[j].deinit();
-                    }
-                    self.allocator.free(authorizations);
-                    return err;
-                };
-                authorizations[i].deinit();
-                authorizations[i] = result;
-            }
-        }
-
         var authz = self;
+        authz.location = location;
         authz.authorizations = authorizations;
         return authz;
     }
@@ -124,29 +114,66 @@ pub const Authorization = struct {
     // has validated the challenge (e.g., by seeing an HTTP or DNS request
     // from the server), the client SHOULD NOT begin polling until it has
     // seen the validation request from the server." §7.5.1
-    fn pollAuthorization(self: Authorization, location: []const u8, auth_url: []const u8) !JsonAuthz {
+    pub fn pollAuthorization(self: Authorization) !Authorization {
         const start = std.time.nanoTimestamp();
         const interval = 250 * std.time.ns_per_ms; // 250 ms in nanoseconds
         const max_duration = 5 * std.time.s_per_min * std.time.ns_per_s; // 5 minutes in nanoseconds
-        var json_authz = try self.getAuthoriztions(location, auth_url);
 
-        while (std.time.nanoTimestamp() - start < max_duration) {
-            if (authzIsFinalized(json_authz.value.status)) {
-                return json_authz;
+        for (self.authorizations, 0..) |authz, i| {
+            var json_authz = try self.postAuthz(self.location, authz.value.authz_url);
+
+            while (std.time.nanoTimestamp() - start < max_duration) {
+                if (authzIsFinalized(json_authz.value.status)) {
+                    self.authorizations[i].deinit();
+                    self.authorizations[i] = json_authz;
+                    break;
+                }
+                std.debug.print("status:{s}\n", .{json_authz.value.status});
+
+                // Sleep before the next poll
+                std.time.sleep(interval);
+                json_authz.deinit();
+
+                // Refresh the authorization object
+                json_authz = try self.postAuthz(self.location, authz.value.authz_url);
             }
-            // Sleep before the next poll
-            std.time.sleep(interval);
-            json_authz.deinit();
-            // Refresh the authorization object
-            json_authz = try self.getAuthoriztions(location, auth_url);
+
+            if (!authzIsFinalized(json_authz.value.status)) {
+                json_authz.deinit();
+                return error.Timeout;
+            }
         }
 
-        json_authz.deinit();
-        return error.Timeout; // Return a timeout error if max duration is exceeded
+        var authz = self;
+        authz.authorizations = self.authorizations;
+        return authz;
     }
 
-    // post
-    fn getAuthoriztions(self: Authorization, location: []const u8, auth_url: []const u8) !JsonAuthz {
+    // GetAuthorization fetches an authorization object from the server.
+    //
+    // "Authorization resources are created by the server in response to
+    // newOrder or newAuthz requests submitted by an account key holder;
+    // their URLs are provided to the client in the responses to these
+    // requests."
+    //
+    // "When a client receives an order from the server in reply to a
+    // newOrder request, it downloads the authorization resources by sending
+    // POST-as-GET requests to the indicated URLs.  If the client initiates
+    // authorization using a request to the newAuthz resource, it will have
+    // already received the pending authorization object in the response to
+    // that request." §7.5
+    pub fn getAuthorization(self: Authorization) !Authorization {
+        for (self.authorizations, 0..) |authz, i| {
+            const result = try self.postAuthz(self.location, authz.value.authz_url);
+            self.authorizations[i].deinit();
+            self.authorizations[i] = result;
+        }
+        var authz = self;
+        authz.authorizations = self.authorizations;
+        return authz;
+    }
+
+    fn postAuthz(self: Authorization, location: []const u8, auth_url: []const u8) !JsonAuthz {
         const uri = try std.Uri.parse(auth_url);
         var buf: [4096]u8 = undefined;
         var req = try self.http_client.open(.POST, uri, .{ .server_header_buffer = &buf });
@@ -192,26 +219,6 @@ pub const Authorization = struct {
             .{ .ignore_unknown_fields = true, .allocate = .alloc_always },
         );
     }
-
-    fn authorize(self: Authorization, challenges: []Challenge, identifier: Identifier, challenge: CHALLENGE) !void {
-        const chall = findChallenge(challenges, challenge);
-        var keyAuthz_buf: [1024]u8 = undefined;
-        const key_authz = try chall.keyAuthorization(&keyAuthz_buf, self.key_pair);
-        if (challenge == .ChallengeTypeHTTP01) {
-            var http01_buf: [1024]u8 = undefined;
-            const http01_path = try chall.http01ResourcePath(&http01_buf);
-            std.debug.print("Path:{s}\n", .{http01_path});
-            std.debug.print("Content:{s}\n", .{key_authz});
-        }
-        if (challenge == .ChallengeTypeDNS01) {
-            var dns_name_buf: [1024]u8 = undefined;
-            var dns_value_buf: [1024]u8 = undefined;
-            const txt_record_name = try chall.dns01TXTRecordName(&dns_name_buf, identifier.value);
-            const txt_record_value = chall.dns01TXTRecordValue(&dns_value_buf, key_authz);
-            std.debug.print("TXT Record Name: {s}\n", .{txt_record_name});
-            std.debug.print("TXT Record Value: {s}\n", .{txt_record_value});
-        }
-    }
 };
 
 // authzIsFinalized returns true if the authorization is finished,
@@ -251,22 +258,6 @@ fn authzIsFinalized(status: []const u8) bool {
     }
     std.log.err("server set unrecognized authorization status: {s}", .{status});
     return true;
-}
-
-fn findChallenge(challenges: []Challenge, selected_challenge: CHALLENGE) Challenge {
-    for (challenges) |chall| {
-        if (stringEgl(chall.type, getChallenge(selected_challenge))) {
-            return chall;
-        }
-    }
-    unreachable;
-}
-
-fn getChallenge(chall: CHALLENGE) []const u8 {
-    return switch (chall) {
-        .ChallengeTypeHTTP01 => "http-01",
-        .ChallengeTypeDNS01 => "dns-01",
-    };
 }
 inline fn stringEgl(a: []const u8, b: []const u8) bool {
     return std.mem.eql(u8, a, b);

@@ -17,5 +17,19 @@ pub fn main() !void {
     defer client.deinit();
 
     try client.newAccount(&[_][]const u8{"aliamer@gmail.com"});
-    try client.newOrder(&[_][]const u8{"cloud-cup.duckdns.org"}, .{ .type = .poll, .challenge = .ChallengeTypeHTTP01 });
+    try client.newOrder(&[_][]const u8{"cloud-cup.duckdns.org"});
+    const challenge = try client.authorize(.ChallengeTypeHTTP01);
+
+    // Prompt user to indicate when they have completed setting up the challenge
+    try std.io.getStdOut().writer().print("Set up the challenge and press ENTER to continue...\n", .{});
+
+    const stdin = std.io.getStdIn().reader();
+    var buf: [1]u8 = undefined;
+    _ = try stdin.readUntilDelimiterOrEof(buf[0..], '\n');
+
+    // Verify the challenge after user input
+    const res = try client.verfiyChallenge(challenge);
+    defer res.deinit();
+
+    std.debug.print("Challenge result: {s}\n", .{res.value.status});
 }

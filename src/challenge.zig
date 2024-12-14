@@ -1,6 +1,8 @@
 const std = @import("std");
 const jwk = @import("jwk.zig");
-
+const Nonce = @import("nonce.zig").Nonce;
+const Directory = @import("directory.zig").Directory;
+const utils = @import("utils.zig");
 const Base64urlEncoder = std.base64.url_safe_no_pad.Encoder;
 const KeyPair = std.crypto.sign.ecdsa.EcdsaP256Sha256.KeyPair;
 // Challenge holds information about an ACME challenge.
@@ -86,5 +88,65 @@ pub const Challenge = struct {
         h.update(keyAuthz);
         h.final(out[0..]);
         return Base64urlEncoder.encode(buf, out[0..]);
+    }
+
+    // InitiateChallenge "indicates to the server that it is ready for the challenge
+    // validation by sending an empty JSON body ('{}') carried in a POST request to
+    // the challenge URL (not the authorization URL)." §7.5.1
+    pub fn initiateChallenge(
+        self: Challenge,
+        key_pair: KeyPair,
+        http_client: *std.http.Client,
+        nonce: Nonce,
+        directory: Directory,
+        allocator: std.mem.Allocator,
+        location: []const u8,
+    ) !std.json.Parsed(Challenge) {
+        const uri = try std.Uri.parse(self.url);
+        var buf: [4096]u8 = undefined;
+        var req = try http_client.open(.POST, uri, .{ .server_header_buffer = &buf });
+        defer req.deinit();
+
+        const current_nonce = try nonce.get(http_client, directory.newNonce);
+        defer nonce.free(current_nonce);
+
+        var body_buffer: [4096]u8 = undefined;
+        var payload_buf: [1024]u8 = undefined;
+        const body = try jwk.encodeJSON(
+            &body_buffer,
+            "ES256",
+            current_nonce,
+            self.url,
+            location,
+            Base64urlEncoder.encode(&payload_buf, "{}"),
+            key_pair,
+        );
+
+        req.transfer_encoding = .{ .content_length = body.len };
+        req.headers.content_type = .{ .override = "application/jose+json" };
+
+        try req.send();
+        var wtr = req.writer();
+        try wtr.writeAll(body);
+        try req.finish();
+        try req.wait();
+
+        const response = try req.reader().readAllAlloc(allocator, 4096);
+        defer allocator.free(response);
+
+        if (req.response.status != .ok) {
+            std.log.err("{s}\n", .{response});
+            return error.FailedRequest;
+        }
+        const new_nonce = try utils.getHeader(req.response, "Replay-Nonce");
+        try nonce.new(new_nonce);
+        std.debug.print("response: {s}\n", .{response});
+
+        return try std.json.parseFromSlice(
+            Challenge,
+            allocator,
+            response,
+            .{ .ignore_unknown_fields = true, .allocate = .alloc_always },
+        );
     }
 };

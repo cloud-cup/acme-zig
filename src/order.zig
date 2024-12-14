@@ -100,6 +100,7 @@ pub const Order = struct {
         var order = self;
         const new_nonce = try utils.getHeader(req.response, "Replay-Nonce");
         try self.nonce.new(new_nonce);
+        std.debug.print("response: {s}\n", .{response});
 
         order.body = try std.json.parseFromSlice(
             OrderBody,
