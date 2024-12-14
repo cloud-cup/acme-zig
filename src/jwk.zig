@@ -144,9 +144,11 @@ pub fn jwkThumbprint(thumb_buffer: []u8, key_pair: KeyPair) ![]const u8 {
     var jw = std.json.writeStream(fbs.writer(), .{});
     try jwkEncodeP256(&jw, key_pair);
 
-    var signer = try key_pair.signer(null);
-    signer.update(fbs.getWritten());
-    const sig = try signer.finalize();
+    // Create a SHA-256 hash of the JSON object
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(fbs.getWritten());
+    var out: [32]u8 = undefined;
+    hasher.final(out[0..]);
 
-    return Base64urlEncoder.encode(thumb_buffer, &sig.toBytes());
+    return Base64urlEncoder.encode(thumb_buffer, out[0..]);
 }

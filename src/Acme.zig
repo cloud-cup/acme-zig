@@ -28,6 +28,7 @@ pub const Acme = struct {
     account: Account,
     order: Order,
     authorization: Authorization,
+    challenge: ?std.json.Parsed(Challenge) = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -59,6 +60,9 @@ pub const Acme = struct {
         self.order.deinit();
         self.nonce.deinit();
         self.authorization.deinit();
+        if (self.challenge) |c| {
+            c.deinit();
+        }
     }
 
     pub fn getNonce(self: Acme) ![]u8 {
@@ -75,6 +79,28 @@ pub const Acme = struct {
         }
         self.order = try self.order.new(self.account.location.?, identifiers);
         self.authorization = try self.authorization.new(self.account.location.?, self.order.body.?.value.authorizations);
+    }
+
+    pub fn verfiyChallenge(self: *Acme, challenge: Challenge) !void {
+        if (self.account.body == null or self.account.location == null) {
+            return error.noAccountCreated;
+        }
+        self.challenge = try challenge.initiateChallenge(
+            self.key_pair,
+            self.http_client,
+            self.nonce,
+            self.directory.value,
+            self.allocator,
+            self.account.location.?,
+        );
+    }
+
+    pub fn getAuthorization(self: *Acme) !void {
+        self.authorization = try self.authorization.getAuthorization();
+    }
+
+    pub fn pollAuthorization(self: *Acme) !void {
+        self.authorization = try self.authorization.pollAuthorization();
     }
 
     // for testing
@@ -104,20 +130,6 @@ pub const Acme = struct {
             return error.UnsupportChallenge;
         }
         return error.UnsupportChallenge;
-    }
-
-    pub fn verfiyChallenge(self: *Acme, challenge: Challenge) !std.json.Parsed(Challenge) {
-        if (self.account.body == null or self.account.location == null) {
-            return error.noAccountCreated;
-        }
-        return try challenge.initiateChallenge(
-            self.key_pair,
-            self.http_client,
-            self.nonce,
-            self.directory.value,
-            self.allocator,
-            self.account.location.?,
-        );
     }
 };
 

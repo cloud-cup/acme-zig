@@ -28,8 +28,10 @@ pub fn main() !void {
     _ = try stdin.readUntilDelimiterOrEof(buf[0..], '\n');
 
     // Verify the challenge after user input
-    const res = try client.verfiyChallenge(challenge);
-    defer res.deinit();
+    try client.verfiyChallenge(challenge);
+    try client.pollAuthorization();
 
-    std.debug.print("Challenge result: {s}\n", .{res.value.status});
+    for (client.authorization.authorizations) |authz| {
+        std.debug.print("Challenge result: {s}\n", .{authz.value.status});
+    }
 }

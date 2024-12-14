@@ -128,7 +128,6 @@ pub const Authorization = struct {
                     self.authorizations[i] = json_authz;
                     break;
                 }
-                std.debug.print("status:{s}\n", .{json_authz.value.status});
 
                 // Sleep before the next poll
                 std.time.sleep(interval);
@@ -212,12 +211,27 @@ pub const Authorization = struct {
         const new_nonce = try utils.getHeader(req.response, "Replay-Nonce");
         try self.nonce.new(new_nonce);
 
-        return try std.json.parseFromSlice(
+        const authz = try std.json.parseFromSlice(
             AuthorizationBody,
             self.allocator,
             response,
             .{ .ignore_unknown_fields = true, .allocate = .alloc_always },
         );
+        errdefer authz.deinit();
+
+        for (authz.value.challenges) |chall| {
+            if (chall.validated) |_| {
+                const error_start = std.mem.indexOf(u8, response, "\"error\":");
+                if (error_start) |err_start| {
+                    const error_end = std.mem.indexOf(u8, response[err_start..], "}").?;
+                    const error_section = response[err_start .. err_start + error_end + 1];
+                    std.log.err("{s}\n", .{error_section});
+                    return error.InvalidChallenge;
+                }
+            }
+        }
+
+        return authz;
     }
 };
 

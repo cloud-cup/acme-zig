@@ -5,6 +5,9 @@ const Directory = @import("directory.zig").Directory;
 const utils = @import("utils.zig");
 const Base64urlEncoder = std.base64.url_safe_no_pad.Encoder;
 const KeyPair = std.crypto.sign.ecdsa.EcdsaP256Sha256.KeyPair;
+
+// const errorField = @field(parsed, "error");
+
 // Challenge holds information about an ACME challenge.
 //
 // "An ACME challenge object represents a server's offer to validate a
@@ -20,12 +23,15 @@ pub const Challenge = struct {
     // type (required, string):  The type of challenge encoded in the
     // object.
     type: []const u8,
+
     // url (required, string):  The URL to which a response can be posted.
     url: []const u8,
+
     // status (required, string):  The status of this challenge.  Possible
     // values are "pending", "processing", "valid", and "invalid" (see
     // Section 7.1.6).
     status: []const u8,
+
     // "The token for a challenge is a string comprised entirely of
     // characters in the URL-safe base64 alphabet." §8.1
     //
@@ -35,7 +41,7 @@ pub const Challenge = struct {
     // validated (optional, string):  The time at which the server validated
     // this challenge, encoded in the format specified in [RFC3339].
     // This field is REQUIRED if the "status" field is "valid".
-    validated: []const u8 = "",
+    validated: ?[]const u8 = null,
 
     // HTTP01ResourcePath returns the URI path for solving the http-01 challenge.
     //
@@ -142,11 +148,24 @@ pub const Challenge = struct {
         try nonce.new(new_nonce);
         std.debug.print("response: {s}\n", .{response});
 
-        return try std.json.parseFromSlice(
+        const challenge = try std.json.parseFromSlice(
             Challenge,
             allocator,
             response,
             .{ .ignore_unknown_fields = true, .allocate = .alloc_always },
         );
+        errdefer challenge.deinit();
+
+        if (challenge.value.validated) |_| {
+            const error_start = std.mem.indexOf(u8, response, "\"error\":");
+            if (error_start) |err_start| {
+                const error_end = std.mem.indexOf(u8, response[err_start..], "}").?;
+                const error_section = response[err_start .. err_start + error_end + 1];
+                std.log.err("{s}\n", .{error_section});
+                return error.ChallengeError;
+            }
+        }
+
+        return challenge;
     }
 };
