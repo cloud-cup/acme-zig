@@ -103,6 +103,17 @@ pub const Acme = struct {
         self.authorization = try self.authorization.pollAuthorization();
     }
 
+    pub fn finalizeOrder(self: *Acme, csrASN1DER: []u8) !void {
+        if (self.account.body == null or self.account.location == null) {
+            return error.noAccountCreated;
+        }
+        if (self.order.body == null) {
+            return error.noOrderCreated;
+        }
+
+        self.order = try self.order.finalizeOrder(self.account.location.?, csrASN1DER);
+    }
+
     // for testing
     // todo: remove it
     pub fn authorize(self: *Acme, challenge: CHALLENGE) !Challenge {

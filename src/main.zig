@@ -26,12 +26,17 @@ pub fn main() !void {
     const stdin = std.io.getStdIn().reader();
     var buf: [1]u8 = undefined;
     _ = try stdin.readUntilDelimiterOrEof(buf[0..], '\n');
-
-    // Verify the challenge after user input
-    try client.verfiyChallenge(challenge);
     try client.pollAuthorization();
 
     for (client.authorization.authorizations) |authz| {
         std.debug.print("Challenge result: {s}\n", .{authz.value.status});
     }
+
+    // Verify the challenge after user input
+    try client.verfiyChallenge(challenge);
+
+    var buffer: [5120]u8 = undefined;
+    const file = try std.fs.cwd().openFile("./csr.txt", .{});
+    const size = try file.reader().readAll(&buffer);
+    try client.finalizeOrder(buffer[0..size]);
 }

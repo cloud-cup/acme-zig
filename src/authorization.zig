@@ -128,6 +128,7 @@ pub const Authorization = struct {
                     self.authorizations[i] = json_authz;
                     break;
                 }
+                std.debug.print("status:{s}\n", .{json_authz.value.status});
 
                 // Sleep before the next poll
                 std.time.sleep(interval);

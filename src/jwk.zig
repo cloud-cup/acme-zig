@@ -24,7 +24,7 @@ pub fn encodeJSON(
     try jw.write(payload);
 
     try jw.objectField("signature");
-    var signature_buffer: [1024]u8 = undefined;
+    var signature_buffer: [13312]u8 = undefined;
     const sig = try jwsSignature(&signature_buffer, protected, payload, key_pair);
     try jw.write(sig);
 
@@ -94,7 +94,7 @@ fn jwsSignature(
     payload: []const u8,
     key_pair: KeyPair,
 ) ![]const u8 {
-    var buf: [1024]u8 = undefined;
+    var buf: [13312]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
     const writer = fbs.writer();
     try writer.writeAll(protected);
